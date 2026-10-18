@@ -95,8 +95,30 @@ and a link `FRONTEND_URL/?lead=<id>` that opens the lead after sign-in. The link
 Environment: `RESEND_API_KEY`, `RESEND_FROM_EMAIL` (server only, never sent to the browser). Without them alerts are recorded as failed with an explanation.
 `sent` means the provider accepted the email, not that it reached an inbox.
 
+## Integrations: Resend inbound email, Google Calendar OAuth, status (I3, I5)
+| Path | Who | Notes |
+|---|---|---|
+| `POST /webhooks/resend/:key` | public, Svix-signed | workspace comes from `:key`; signature checked with that workspace's signing secret; raw body preserved; `200 {received, result: processed\|duplicate\|ignored}`, `401 INVALID_SIGNATURE`, `400` malformed, `500/503` so Resend retries |
+| `GET/PUT/DELETE /integrations/resend` `{webhookSecret, receivingAddress?}` | `manageIntegrations` | PUT returns `webhookUrl` to paste into Resend; the secret is encrypted and shown masked |
+| `GET /integrations/google/connect` | session | returns `{url, redirectUri}`; add `?redirect=1` to get a 302 to Google instead |
+| `GET /integrations/google/callback?code&state` | session cookie | state is single-use, hashed, bound to the session that started it; ends with a 302 to `FRONTEND_URL/?google=connected\|denied\|error&reason=...` |
+| `GET /integrations/google/status`, `DELETE /integrations/google` | session | my connection (`connected\|needs_reconnection\|not_connected`); Admins also get `employees[]`; DELETE revokes at Google and removes my tokens |
+| `GET /integrations`, `GET /integrations/events?provider&result` | `manageIntegrations` | one status list (email, calendar, escalation alerts) with `lastSuccessAt`, `recentErrors`, `limits`; and the synchronisation history |
+
+Received email: the sender becomes a contact (matched by address), the message joins that contact's `email` conversation, and an unknown sender also gets a lead
+(`source: message`). Everything is idempotent on the provider's email id, so a repeated or re-sent webhook adds nothing.
+Environment: `RESEND_API_KEY`, `RESEND_FROM_EMAIL`, `GOOGLE_CALENDAR_CLIENT_ID`, `GOOGLE_CALENDAR_CLIENT_SECRET` (server only), `PUBLIC_BASE_URL`, `FRONTEND_URL`.
+Adapters are loaded from `integrations/resend` and `integrations/google-calendar` (run `npm install` in each); if one is missing the feature answers `503 INTEGRATION_NOT_CONFIGURED` and nothing else is affected.
+
+## Notes for the frontend
+- Alert emails link to `FRONTEND_URL/?lead=<id>`: after sign-in, open that lead (`GET /leads/:id`) and remove the query string.
+- After Google consent the browser returns to `FRONTEND_URL/?google=connected|denied|error&reason=state|oauth|signin_required|not_configured|missing_parameters`: show a message and refresh `GET /integrations/google/status`.
+- The public enquiry form is `FRONTEND_URL/?form=<key>` (key from `GET /settings/public-form`) posting to `POST /public/leads/:key`.
+- Invitation links are `FRONTEND_URL/?invite=<token>` and complete with `POST /auth/accept-invitation`.
+- Employees set their alert address with `GET/PUT/DELETE /me/notification-destination`; Admins see alert history at `GET /notifications/alerts`.
+
 ## Not implemented here (Member 3, I1-I5)
-Messaging conversations and Twilio webhooks, Stripe payment requests and webhooks, Google Calendar OAuth and appointments,
+Messaging conversations and Twilio webhooks, Stripe payment requests and webhooks, Google Calendar appointments (booking, free/busy, reschedule, cancel),
 and the integrations status page. The core exposes these hooks for them (register routers in `backend/src/integrations/index.ts`; webhooks get the exact bytes as `req.rawBody` plus an `IntegrationContext` with the database, the encrypted-secrets key, the public base URL and an injectable `fetch`): tables
 `conversations, messages, payments, appointments, integration_connections, integration_events, processed_events,
 notification_destinations, delivery_attempts`; `processOnce()` for webhook de-duplication in
