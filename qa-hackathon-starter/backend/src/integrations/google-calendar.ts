@@ -23,13 +23,13 @@ import { tx } from "../db.ts";
 import { apiError, requireAuth } from "../middleware/requireAuth.ts";
 import { loadMember } from "../middleware/requirePermission.ts";
 
-interface GoogleCalendarEnvironment {
+export interface GoogleCalendarEnvironment {
   GOOGLE_CALENDAR_CLIENT_ID?: string;
   GOOGLE_CALENDAR_CLIENT_SECRET?: string;
   GOOGLE_CALENDAR_REDIRECT_URI?: string;
 }
 
-function oauthConfiguration(
+export function oauthConfiguration(
   environment: GoogleCalendarEnvironment,
 ): GoogleCalendarConfiguration {
   const clientId = environment.GOOGLE_CALENDAR_CLIENT_ID?.trim();
@@ -41,14 +41,14 @@ function oauthConfiguration(
   return { clientId, clientSecret, redirectUri };
 }
 
-function memberContext(
+export function memberContext(
   workspaceId: string,
   memberId: string,
 ): GoogleCalendarMemberContext {
   return { workspaceId, memberId };
 }
 
-function googleCalendarAdapter(
+export function googleCalendarAdapter(
   ctx: IntegrationContext,
   configuration: GoogleCalendarConfiguration,
   sdk?: GoogleCalendarSdk,
@@ -143,11 +143,17 @@ function googleCalendarAdapter(
             : status === "disconnected"
               ? "error"
               : "needs_reconnection";
+        const reason =
+          status === "revoked"
+            ? "Google access was revoked or expired. Reconnect Google Calendar."
+            : status === "reauthorization_required"
+              ? "Google did not return a refresh token. Reconnect Google Calendar and approve access again."
+              : null;
         ctx.db
           .prepare(
-            "UPDATE integration_connections SET status = ?, updated_at = ? WHERE id = ?",
+            "UPDATE integration_connections SET status = ?, last_error = ?, updated_at = ? WHERE id = ?",
           )
-          .run(persistedStatus, new Date().toISOString(), connection.id);
+          .run(persistedStatus, reason, new Date().toISOString(), connection.id);
       },
       async deleteCredentials(context) {
         const connection = getConnection(

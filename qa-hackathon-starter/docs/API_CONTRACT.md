@@ -95,9 +95,49 @@ and a link `FRONTEND_URL/?lead=<id>` that opens the lead after sign-in. The link
 Environment: `RESEND_API_KEY`, `RESEND_FROM_EMAIL` (server only, never sent to the browser). Without them alerts are recorded as failed with an explanation.
 `sent` means the provider accepted the email, not that it reached an inbox.
 
+## Integrations (final routes on `integration/combined`)
+Route names are frozen as agreed with the integrations owner; this section only adds what is built on top of them.
+
+**Resend (email)**
+| Path | Who | Notes |
+|---|---|---|
+| `POST /webhooks/resend/:webhookKey` | public, Svix-signed | workspace from the key; signature verified with that workspace's signing secret; `200 {kind: processed\|duplicate\|ignored}`, `401 INVALID_SIGNATURE`, `400 INVALID_WEBHOOK`, `500` so Resend retries. Every refusal or failure is recorded in the sync history |
+| `GET/PUT/DELETE /integrations/resend` `{webhookSecret, apiKey?, fromEmail?, inboundAddress?}` | `manageIntegrations` | PUT creates the workspace's connection and returns `webhookUrl` to paste into Resend; secrets are encrypted and shown masked; the API key falls back to `RESEND_API_KEY` |
+
+A received email matches or creates the contact by sender address and joins its `email` conversation. **Only a new sender also gets a lead** (`source: message`);
+a later email from a known sender does not. Mail addressed to another inbox, or sent from the platform's own address, is recorded and ignored (HTTP 200, so it is not retried).
+HTML-only mail is stored as plain text.
+
+**Google Calendar** (prefix `/integrations/google/calendar`)
+| Path | Who | Notes |
+|---|---|---|
+| `GET /oauth/start` `{authorizationUrl}`, `GET /oauth/callback?code&state` | session | session-bound single-use state (the callback redirect to the frontend is handled separately) |
+| `GET /status` | session | `{state: connected\|needs_reconnection\|not_connected, lastError, account}`; Admins also get `employees[]` (I3.7) |
+| `DELETE /` | session | disconnect my own account: revokes at Google, deletes the stored tokens (204; safe to repeat) |
+| `GET /busy?from&to&timeZone&userId?` | `crmView` | busy periods for the booking screen; `409 CALENDAR_NOT_CONNECTED` names the employee |
+
+**Appointments** (`/appointments`)
+| Path | Who | Notes |
+|---|---|---|
+| `GET /appointments?from&to&userId&contactId&status&timezone&page` | `crmView` | `from=now` allowed; each item has UTC `startsAt/endsAt`, the booking `timezone`, and `startsAtLocal/endsAtLocal` in the viewer's `timezone` |
+| `POST /appointments` `{contactId, opportunityId?, userId?, title, description?, startsAt, durationMinutes, timezone}` | `crmEdit` | `startsAt` must carry an explicit UTC offset (offset-free times are `400`); creates the event in the employee's Google Calendar; `409 CALENDAR_OVERLAP` on a clash (nothing is saved), `409 CALENDAR_NOT_CONNECTED / CALENDAR_NEEDS_RECONNECTION` for an employee who cannot be booked, `502 PROVIDER_ERROR` on a Google outage |
+| `PATCH /appointments/:id` `{startsAt?, durationMinutes?, timezone?}` | `crmEdit` | reschedules in Google and on the record (the clash check ignores the event itself); `409 NOT_SYNCED` if it has no Google event |
+| `DELETE /appointments/:id` | `crmEdit` | cancels in Google and marks the appointment `cancelled` (kept on the record); repeating it changes nothing |
+
+Booking counts as a recorded action on the contact's lead; every change is in the contact's activity history and the audit log.
+
+**Status page and history** (`manageIntegrations`): `GET /integrations` lists email, calendar and escalation alerts with `status`, `lastSuccessAt`, `recentErrors`, `details` and `limits`;
+`GET /integrations/events?provider&result&page` is the synchronisation history.
+
+## Notes for the frontend
+- Alert emails link to `FRONTEND_URL/?lead=<id>`: after sign-in, open that lead (`GET /leads/:id`) and remove the query string. Without this the link only opens the overview.
+- The public enquiry form is `FRONTEND_URL/?form=<key>` (key from `GET /settings/public-form`) posting to `POST /public/leads/:key`.
+- Invitation links are `FRONTEND_URL/?invite=<token>` and complete with `POST /auth/accept-invitation`.
+- Employees set their alert address with `GET/PUT/DELETE /me/notification-destination`; Admins see alert history at `GET /notifications/alerts`.
+- Calendar screens: `GET /integrations/google/calendar/status` (+ `/oauth/start` to connect, `DELETE` to disconnect), `GET /appointments`, and the booking form posts to `POST /appointments` with a timezone-aware `startsAt`.
+
 ## Not implemented here (Member 3, I1-I5)
-Messaging conversations and Twilio webhooks, Stripe payment requests and webhooks, Google Calendar OAuth and appointments,
-and the integrations status page. The core exposes these hooks for them (register routers in `backend/src/integrations/index.ts`; webhooks get the exact bytes as `req.rawBody` plus an `IntegrationContext` with the database, the encrypted-secrets key, the public base URL and an injectable `fetch`): tables
+Messaging conversations and Twilio webhooks, and Stripe payment requests and webhooks. The core exposes these hooks for them (register routers in `backend/src/integrations/index.ts`; webhooks get the exact bytes as `req.rawBody` plus an `IntegrationContext` with the database, the encrypted-secrets key, the public base URL and an injectable `fetch`): tables
 `conversations, messages, payments, appointments, integration_connections, integration_events, processed_events,
 notification_destinations, delivery_attempts`; `processOnce()` for webhook de-duplication in
 `src/integrations/core.ts`; `createLead()`/`recordLeadAction()`; `findOrCreateContact()`; and pending alert rows in

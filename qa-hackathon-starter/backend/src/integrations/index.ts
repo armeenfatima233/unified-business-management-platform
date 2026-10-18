@@ -14,6 +14,10 @@ import {
 import type { IntegrationContext } from "./core.ts";
 import { resendWebhookRouter } from "./resend.ts";
 import { googleCalendarOAuthRouter } from "./google-calendar.ts";
+import { googleCalendarManagementRouter } from "./google-calendar-management.ts";
+import { appointmentsRouter } from "./appointments.ts";
+import { resendSettingsRouter } from "./resend-settings.ts";
+import { integrationsStatusRouter } from "./status.ts";
 
 export function mountIntegrations(app: Express, ctx: IntegrationContext): void {
   app.use("/api/v1/webhooks/resend", resendWebhookRouter(ctx));
@@ -21,6 +25,11 @@ export function mountIntegrations(app: Express, ctx: IntegrationContext): void {
     "/api/v1/integrations/google/calendar",
     googleCalendarOAuthRouter(ctx),
   );
+  // Calendar status / disconnect / free-busy, appointments, Resend setup and the central status page (I3, I5).
+  app.use("/api/v1/integrations/google/calendar", googleCalendarManagementRouter(ctx));
+  app.use("/api/v1/appointments", appointmentsRouter(ctx));
+  app.use("/api/v1", resendSettingsRouter(ctx));
+  app.use("/api/v1", integrationsStatusRouter(ctx));
 }
 
 // I4: builds the Resend escalation-alert adapter (integrations/resend) on first use. It is loaded lazily and

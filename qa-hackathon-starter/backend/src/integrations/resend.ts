@@ -27,6 +27,7 @@ import {
 import { tx } from "../db.ts";
 import { createLead } from "../leads/service.ts";
 import { apiError } from "../middleware/requireAuth.ts";
+import { htmlToText } from "./text.ts";
 
 type ResendAdapter = Pick<ResendEmailAdapter, "handleWebhook" | "sendEmail">;
 type ResendClientFactory = (apiKey: string) => ResendSdkClient;
@@ -67,12 +68,13 @@ function createAdapter(
   const secrets = configuredSecrets(ctx, connection);
   const config =
     connectionConfig<ResendConnectionConfig>(connection);
-  if (!secrets.apiKey || !secrets.webhookSecret) {
+  const apiKey = secrets.apiKey ?? process.env.RESEND_API_KEY;
+  if (!apiKey || !secrets.webhookSecret) {
     throw new Error("Resend connection credentials are incomplete");
   }
 
   return new ResendEmailAdapter({
-    client: clientFactory(secrets.apiKey),
+    client: clientFactory(apiKey),
     webhookSecret: secrets.webhookSecret,
     defaultFrom: config.fromEmail,
     eventDeduplicator,
@@ -133,12 +135,36 @@ function handleIncomingEmail(
       address.trim().toLowerCase(),
     );
     if (!actualRecipients.includes(expected)) {
-      throw new TypeError("Resend email was addressed to an unconfigured inbox");
+      logEvent(ctx.db, {
+        workspaceId: connection.workspace_id, provider: "resend", direction: "inbound", eventType: "email.received",
+        externalId: email.providerEmailId, result: "rejected", detail: "Not addressed to this workspace's inbox; ignored.",
+      });
+      return;
     }
   }
 
-  const sender = parseSender(email.from);
-  const messageBody = email.text ?? email.html ?? "";
+  let sender: { email: string; name: string };
+  try {
+    sender = parseSender(email.from);
+  } catch {
+    logEvent(ctx.db, {
+      workspaceId: connection.workspace_id, provider: "resend", direction: "inbound", eventType: "email.received",
+      externalId: email.providerEmailId, result: "rejected", detail: "The sender address is not valid; ignored.",
+    });
+    return; // not retryable: the same email would fail again
+  }
+  // Never process mail from this platform's own address: that is how mail loops start.
+  const own = [process.env.RESEND_FROM_EMAIL, connectionConfig<ResendConnectionConfig>(connection).fromEmail]
+    .filter((a): a is string => Boolean(a)).map((a) => (/<([^>]+)>/.exec(a)?.[1] ?? a).trim().toLowerCase());
+  if (own.includes(sender.email)) {
+    logEvent(ctx.db, {
+      workspaceId: connection.workspace_id, provider: "resend", direction: "inbound", eventType: "email.received",
+      externalId: email.providerEmailId, result: "rejected", detail: "Sent from this platform's own address; ignored.",
+    });
+    return;
+  }
+  // Plain text when the mail has it; otherwise the HTML is converted so markup is never stored.
+  const messageBody = (email.text?.trim() ? email.text : email.html ? htmlToText(email.html) : "").slice(0, 20000);
   const storedBody = email.subject
     ? `${email.subject}\n\n${messageBody}`
     : messageBody;
@@ -195,13 +221,15 @@ function handleIncomingEmail(
         connection.workspace_id,
         conversation.id,
       );
-    createLead(ctx.db, {
-      workspaceId: connection.workspace_id,
-      contactId: contact.id,
-      source: "message",
-      message: storedBody,
-      actorId: null,
-    });
+    if (contact.created) {
+      createLead(ctx.db, {
+        workspaceId: connection.workspace_id,
+        contactId: contact.id,
+        source: "message",
+        message: storedBody.slice(0, 2000),
+        actorId: null,
+      });
+    }
     markSuccess(ctx.db, connection);
     logEvent(ctx.db, {
       workspaceId: connection.workspace_id,
@@ -305,12 +333,21 @@ export function resendWebhookRouter(
       }
       res.status(200).json(result);
     } catch (error) {
+      // Every refused or failed delivery is kept in the synchronisation history (I5.4), without the payload.
+      const record = (result: "rejected" | "error", detail: string) =>
+        logEvent(ctx.db, {
+          workspaceId: connection.workspace_id, provider: "resend", direction: "inbound", eventType: "webhook",
+          externalId: req.header("svix-id") ?? null, result, detail,
+        });
       if (error instanceof ResendWebhookAuthenticationError) {
+        record("rejected", "Signature check failed; nothing was changed.");
         return apiError(res, 401, "INVALID_SIGNATURE", "Webhook signature is invalid.");
       }
       if (error instanceof ResendWebhookPayloadError) {
+        record("rejected", "The payload was malformed.");
         return apiError(res, 400, "INVALID_WEBHOOK", "Webhook payload is invalid.");
       }
+      record("error", `Processing failed (${error instanceof Error ? error.name : "UnknownError"}); the provider will retry.`);
       console.error("Resend webhook processing failed", {
         connectionId: connection.id,
         errorName: error instanceof Error ? error.name : "UnknownError",
