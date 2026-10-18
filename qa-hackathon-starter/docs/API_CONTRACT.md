@@ -83,9 +83,21 @@ an acknowledged lead whose owner goes On leave/Offline keeps its owner and shows
 - `GET/PUT /dashboard/preferences` `{hidden: widgetId[]}` remembers show/hide per user.
 - `GET /events` is Server-Sent Events: `data: {"type": "newLead|escalation|incomingMessage|leadUpdated|paymentUpdated", "title", "detail", "tone", "leadId"}`.
 
+## Escalation alerts by email (F3.9, I4)
+When a lead escalates (or is reassigned because its owner went On leave or was removed), the core writes a pending alert in the same transaction.
+A worker sends it through the Resend adapter (`integrations/resend`) within seconds, to the new owner, naming the lead, its source, the reason
+and a link `FRONTEND_URL/?lead=<id>` that opens the lead after sign-in. The link must be https (the adapter requires it).
+| Path | Who | Notes |
+|---|---|---|
+| `GET /notifications/alerts?status=pending\|sent\|failed` | `manageIntegrations` | every alert with recipient, status, attempts, plain-language `lastError` and attempt `history` |
+| `POST /notifications/alerts/:id/retry` | `manageIntegrations` | only failed alerts; audited |
+| `GET/PUT/DELETE /me/notification-destination` `{email}` | any member | where my alerts go; defaults to the sign-in address |
+Environment: `RESEND_API_KEY`, `RESEND_FROM_EMAIL` (server only, never sent to the browser). Without them alerts are recorded as failed with an explanation.
+`sent` means the provider accepted the email, not that it reached an inbox.
+
 ## Not implemented here (Member 3, I1-I5)
 Messaging conversations and Twilio webhooks, Stripe payment requests and webhooks, Google Calendar OAuth and appointments,
-the escalation alert sender (I4), and the integrations status page. The core exposes these hooks for them (register routers in `backend/src/integrations/index.ts`; webhooks get the exact bytes as `req.rawBody` plus an `IntegrationContext` with the database, the encrypted-secrets key, the public base URL and an injectable `fetch`): tables
+and the integrations status page. The core exposes these hooks for them (register routers in `backend/src/integrations/index.ts`; webhooks get the exact bytes as `req.rawBody` plus an `IntegrationContext` with the database, the encrypted-secrets key, the public base URL and an injectable `fetch`): tables
 `conversations, messages, payments, appointments, integration_connections, integration_events, processed_events,
 notification_destinations, delivery_attempts`; `processOnce()` for webhook de-duplication in
 `src/integrations/core.ts`; `createLead()`/`recordLeadAction()`; `findOrCreateContact()`; and pending alert rows in

@@ -411,7 +411,7 @@ CREATE TABLE IF NOT EXISTS delivery_attempts (
   workspace_id    TEXT NOT NULL,
   lead_id         TEXT NOT NULL,
   user_id         TEXT NOT NULL,
-  channel         TEXT NOT NULL,
+  channel         TEXT NOT NULL,                -- 'email' (Resend, I4)
   reason          TEXT,                         -- why the alert was raised (shown in the message)
   status          TEXT NOT NULL CHECK (status IN ('pending','sent','failed')),
   attempts        INTEGER NOT NULL DEFAULT 0,

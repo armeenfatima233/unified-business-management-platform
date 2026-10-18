@@ -3,22 +3,18 @@ import { after, before, describe, it } from "node:test";
 import type { GoogleCalendarSdk } from "../../integrations/google-calendar/google-calendar-adapter.ts";
 import type { ResendSdkClient } from "../../integrations/resend/resend-email-adapter.ts";
 import { getConnection, saveConnection, type IntegrationContext } from "../src/integrations/core.ts";
-import { dispatchResendEscalationAlerts, resendWebhookRouter } from "../src/integrations/resend.ts";
+import { resendWebhookRouter } from "../src/integrations/resend.ts";
 import { googleCalendarOAuthRouter } from "../src/integrations/google-calendar.ts";
 import { startApp, type TestApp } from "./helpers.ts";
 
 let app: TestApp;
 let resendClientMode: "valid" | "invalid" = "valid";
 let receivedEmailId = "";
-let sentEmails = 0;
 
 const fakeResendClient = (_apiKey: string): ResendSdkClient =>
   ({
     emails: {
-      send: async () => {
-        sentEmails += 1;
-        return { data: { id: "re_alert_1" }, error: null };
-      },
+      send: async () => ({ data: { id: "re_alert_1" }, error: null }),
       receiving: {
         get: async (id: string) => ({
           error: null,
@@ -220,47 +216,6 @@ describe("backend Resend integration", () => {
     resendClientMode = "valid";
   });
 
-  it("dispatches queued email escalation alerts and records provider acceptance", async () => {
-    const team = await app.team(0);
-    const ctx = integrationContext();
-    saveConnection(
-      ctx,
-      team.workspaceId,
-      "resend",
-      null,
-      { fromEmail: "alerts@example.test" },
-      { apiKey: "test-api-key", webhookSecret: "test-webhook-secret" },
-    );
-    const contactId = "contact_escalation";
-    const leadId = "lead_escalation";
-    const now = new Date().toISOString();
-    app.db.prepare(
-      `INSERT INTO contacts (id, workspace_id, name, email, created_at, updated_at)
-       VALUES (?,?,?,?,?,?)`,
-    ).run(contactId, team.workspaceId, "Escalation Lead", "lead@example.test", now, now);
-    app.db.prepare(
-      `INSERT INTO leads
-       (id, workspace_id, contact_id, source, owner_id, assigned_at, first_assigned_at, escalation_count, level, last_action_at, created_at)
-       VALUES (?,?,?,'message',?,?,?,1,1,?,?)`,
-    ).run(leadId, team.workspaceId, contactId, team.ownerId, now, now, now, now);
-    app.db.prepare(
-      "INSERT INTO notification_destinations (workspace_id, user_id, channel, destination) VALUES (?,?,'email',?)",
-    ).run(team.workspaceId, team.ownerId, "oncall@example.test");
-    app.db.prepare(
-      `INSERT INTO delivery_attempts
-       (id, workspace_id, lead_id, user_id, channel, reason, status, attempts, next_attempt_at, created_at)
-       VALUES (?,?,?,?,'email','Needs immediate follow-up','pending',0,?,?)`,
-    ).run("alert-1", team.workspaceId, leadId, team.ownerId, now, now);
-
-    sentEmails = 0;
-    await dispatchResendEscalationAlerts(ctx, fakeResendClient);
-    const alert = app.db
-      .prepare("SELECT status, attempts FROM delivery_attempts WHERE id = ?")
-      .get("alert-1") as { status: string; attempts: number };
-    assert.equal(alert.status, "sent");
-    assert.equal(alert.attempts, 1);
-    assert.equal(sentEmails, 1);
-  });
 });
 
 describe("Google Calendar OAuth backend routes", () => {

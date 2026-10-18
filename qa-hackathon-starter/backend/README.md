@@ -28,6 +28,7 @@ npm test            # all suites, real HTTP against throwaway databases
 | `WORKER_INTERVAL_MS` | 1000 | how often due acknowledgement windows are checked |
 | `PUBLIC_BASE_URL` | `http://localhost:<PORT>` | public HTTPS address providers call (tunnel or deployed host) |
 | `FRONTEND_URL` | first `CORS_ORIGINS` | where alert links and OAuth redirects point |
+| `RESEND_API_KEY`, `RESEND_FROM_EMAIL` | unset | enable Resend escalation emails (I4) |
 | `SECRETS_KEY` | generated in `data/secrets.key` | 32-byte key (64 hex) encrypting provider secrets at rest |
 | `GOOGLE_CALENDAR_CLIENT_ID` | — | Google OAuth web client ID |
 | `GOOGLE_CALENDAR_CLIENT_SECRET` | — | Google OAuth web client secret |
@@ -41,9 +42,13 @@ npm test            # all suites, real HTTP against throwaway databases
   The connection's encrypted secrets contain `apiKey` and `webhookSecret`; its non-secret config may
   contain `fromEmail` and `inboundAddress`. Configure Resend's webhook URL as
   `${PUBLIC_BASE_URL}/api/v1/webhooks/resend/${webhook_key}`.
-- Escalation deliveries use `notification_destinations` with `channel = 'email'` and the employee's
-  recipient in `destination`. The existing backend does not yet expose a settings endpoint to create
-  or edit these Resend connection and recipient settings.
+- Escalation dispatch, recipient resolution, failure recording, recipient settings, alert history, and
+  retry endpoints are owned by `src/integrations/alerts.ts`. Employees configure their recipient at
+  `GET/PUT/DELETE /api/v1/me/notification-destination`; if unset, their account email is used. Admins
+  can review `GET /api/v1/notifications/alerts` and retry with
+  `POST /api/v1/notifications/alerts/:id/retry`. Resend sender credentials are configured with
+  `RESEND_API_KEY` and `RESEND_FROM_EMAIL`. Provisioning the workspace-specific Resend webhook connection
+  is not exposed as an API route yet.
 - Google OAuth starts at `GET /api/v1/integrations/google/calendar/oauth/start` and returns to
   `GET /api/v1/integrations/google/calendar/oauth/callback`. OAuth state is session-bound and one-use;
   member credentials are encrypted in the existing Google integration connection. Calendar appointment

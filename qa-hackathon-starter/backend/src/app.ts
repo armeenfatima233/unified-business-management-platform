@@ -12,6 +12,7 @@ import { cors, csrfGuard, securityHeaders } from "./middleware/cors.ts";
 import { invitationAcceptRouter, membersRouter } from "./members/routes.ts";
 import { setSessionCookie } from "./auth/sessions.ts";
 import { auditRouter } from "./audit/audit.ts";
+import { alertsRouter } from "./integrations/alerts.ts";
 import { dashboardRouter } from "./dashboard/routes.ts";
 import { eventsRouter } from "./events/bus.ts";
 import { leadSettingsRouter, leadsRouter, publicLeadsRouter } from "./leads/routes.ts";
@@ -62,6 +63,7 @@ export function createApp(db: Db, opts: AppOptions = {}) {
   app.use("/api/v1/custom-fields", customFieldsRouter(db));
   app.use("/api/v1/saved-filters", savedFiltersRouter(db));
   app.use("/api/v1/dashboard", dashboardRouter(db));
+  app.use("/api/v1", alertsRouter(db));
   app.use("/api/v1/leads", leadsRouter(db));
   app.use("/api/v1/settings", leadSettingsRouter(db));
   app.use("/api/v1/public", publicLeadsRouter(db));

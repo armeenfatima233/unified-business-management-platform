@@ -7,10 +7,6 @@ import {
   ResendWebhookPayloadError,
   type ResendSdkClient,
 } from "../../../integrations/resend/resend-email-adapter.ts";
-import {
-  ResendEscalationAlertAdapter,
-  type EscalationAlertFailure,
-} from "../../../integrations/resend/escalation-alert-adapter.ts";
 import type {
   EmailDeliveryEvent,
   IncomingEmail,
@@ -22,9 +18,7 @@ import {
   connectionConfig,
   connectionSecrets,
   findByWebhookKey,
-  getConnection,
   logEvent,
-  markFailure,
   markSuccess,
   processOnce,
   type Connection,
@@ -325,177 +319,4 @@ export function resendWebhookRouter(
     }
   });
   return router;
-}
-
-function failureRecorder(
-  ctx: IntegrationContext,
-): { recordFailure(failure: EscalationAlertFailure): Promise<void> } {
-  return {
-    async recordFailure(failure) {
-      const nextAttemptAt = failure.finalAttempt
-        ? null
-        : new Date(Date.now() + (failure.attempt === 1 ? 250 : 1000)).toISOString();
-      ctx.db
-        .prepare(
-          `UPDATE delivery_attempts
-           SET attempts = MAX(attempts, ?), last_error = ?, status = ?, next_attempt_at = ?
-           WHERE id = ? AND workspace_id = ?`,
-        )
-        .run(
-          failure.attempt,
-          failure.errorName,
-          failure.finalAttempt ? "failed" : "pending",
-          nextAttemptAt,
-          failure.alertId,
-          failure.workspaceId,
-        );
-      logEvent(ctx.db, {
-        workspaceId: failure.workspaceId,
-        provider: "resend",
-        direction: "outbound",
-        eventType: "escalation_alert",
-        externalId: failure.alertId,
-        result: "error",
-        detail: `${failure.errorName}; attempt ${failure.attempt}`,
-      });
-    },
-  };
-}
-
-function escalationAdapter(
-  ctx: IntegrationContext,
-  connection: Connection,
-  clientFactory: ResendClientFactory,
-) {
-  const alertAdapter = createAdapter(
-    ctx,
-    connection,
-    clientFactory,
-    { onIncomingEmail: () => undefined, onDeliveryEvent: () => undefined },
-    { processOnce: async (_eventId, work) => { await work(); return true; } },
-  );
-  return new ResendEscalationAlertAdapter({
-    sender: alertAdapter,
-    recipientResolver: {
-      async resolveRecipient(workspaceId, employeeId) {
-        const row = ctx.db
-          .prepare(
-            "SELECT destination FROM notification_destinations WHERE workspace_id = ? AND user_id = ? AND channel = 'email'",
-          )
-          .get(workspaceId, employeeId) as { destination: string } | undefined;
-        return row ? { email: row.destination } : null;
-      },
-    },
-    failureRecorder: failureRecorder(ctx),
-  });
-}
-
-export async function dispatchResendEscalationAlerts(
-  ctx: IntegrationContext,
-  clientFactory: ResendClientFactory = createResendSdkClient,
-): Promise<void> {
-  const now = new Date().toISOString();
-  const pending = ctx.db
-    .prepare(
-      `SELECT d.id, d.workspace_id, d.user_id, d.lead_id, d.reason, d.attempts,
-              c.name AS lead_name, l.source AS lead_source
-       FROM delivery_attempts d
-       JOIN leads l ON l.workspace_id = d.workspace_id AND l.id = d.lead_id
-       JOIN contacts c ON c.workspace_id = l.workspace_id AND c.id = l.contact_id
-       WHERE d.channel = 'email' AND d.status = 'pending' AND d.attempts < 3
-         AND (d.next_attempt_at IS NULL OR d.next_attempt_at <= ?)
-       ORDER BY d.created_at LIMIT 10`,
-    )
-    .all(now) as {
-    id: string;
-    workspace_id: string;
-    user_id: string;
-    lead_id: string;
-    reason: string | null;
-    attempts: number;
-    lead_name: string;
-    lead_source: string;
-  }[];
-
-  for (const item of pending) {
-    const connection = getConnection(
-      ctx.db,
-      item.workspace_id,
-      "resend",
-    );
-    if (!connection || connection.status !== "connected") {
-      const message = "Resend is not connected for this workspace";
-      ctx.db
-        .prepare(
-          "UPDATE delivery_attempts SET status = 'failed', last_error = ?, next_attempt_at = NULL WHERE id = ?",
-        )
-        .run(message, item.id);
-      continue;
-    }
-    try {
-      const base = new URL(ctx.frontendUrl);
-      if (base.protocol !== "https:") {
-        throw new TypeError("The escalation link requires an HTTPS frontend URL");
-      }
-      const directLink = new URL(
-        `/leads/${encodeURIComponent(item.lead_id)}`,
-        base,
-      ).toString();
-      const adapter = escalationAdapter(ctx, connection, clientFactory);
-      const receipt = await adapter.sendEscalationAlert({
-        alertId: item.id,
-        previousAttempts: item.attempts,
-        workspaceId: item.workspace_id,
-        employeeId: item.user_id,
-        leadId: item.lead_id,
-        leadName: item.lead_name,
-        leadSource: item.lead_source,
-        reason: item.reason ?? "Lead escalated",
-        directLink,
-      });
-      ctx.db
-        .prepare(
-          "UPDATE delivery_attempts SET status = 'sent', attempts = ?, last_error = NULL, next_attempt_at = NULL WHERE id = ?",
-        )
-        .run(receipt.attempts, item.id);
-      markSuccess(ctx.db, connection);
-      logEvent(ctx.db, {
-        workspaceId: item.workspace_id,
-        provider: "resend",
-        direction: "outbound",
-        eventType: "escalation_alert",
-        externalId: receipt.providerEmailId,
-        result: "ok",
-      });
-    } catch (error) {
-      markFailure(
-        ctx.db,
-        connection,
-        error instanceof Error ? error.name : "UnknownError",
-      );
-      ctx.db
-        .prepare(
-          "UPDATE delivery_attempts SET status = 'failed', last_error = COALESCE(last_error, ?), next_attempt_at = NULL WHERE id = ? AND status = 'pending'",
-        )
-        .run(
-          error instanceof Error ? error.name : "UnknownError",
-          item.id,
-        );
-      console.error("Resend escalation alert failed", {
-        alertId: item.id,
-        errorName: error instanceof Error ? error.name : "UnknownError",
-      });
-    }
-  }
-}
-
-export function mountResendIntegration(
-  app: import("express").Express,
-  ctx: IntegrationContext,
-  clientFactory?: ResendClientFactory,
-): void {
-  app.use(
-    "/api/v1/webhooks/resend",
-    resendWebhookRouter(ctx, clientFactory),
-  );
 }
