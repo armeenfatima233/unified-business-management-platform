@@ -156,3 +156,53 @@ describe("opening a database created before the CRM existed", () => {
     rmSync(dir, { recursive: true, force: true });
   });
 });
+
+describe("integration seam (raw body, context, secrets)", () => {
+  it("hands integrations the exact bytes of a webhook body, a context, and mounts before the 404", async () => {
+    const { decryptSecrets, encryptSecrets } = await import("../src/integrations/core.ts");
+    let seen: any;
+    const a = await startApp({
+      integrations: {
+        secretsKey: Buffer.alloc(32, 7), publicBaseUrl: "https://hooks.example", frontendUrl: "https://app.example",
+        mount: (expressApp, ctx) => {
+          seen = ctx;
+          expressApp.post("/api/v1/webhooks/probe", (req, res) => res.json({ raw: req.rawBody?.toString("utf8"), parsed: req.body, svix: req.get("svix-id") ?? null }));
+        },
+      },
+    });
+    try {
+      const json = '{ "id":"evt_1",   "type":"email.received" }'; // odd spacing: a re-serialised body would not match a signature
+      const r1 = (await (await fetch(`${a.base}/webhooks/probe`, { method: "POST", headers: { "content-type": "application/json", "svix-id": "msg_1" }, body: json })).json()) as any;
+      assert.equal(r1.raw, json);
+      assert.equal(r1.parsed.type, "email.received");
+      assert.equal(r1.svix, "msg_1");
+      const form = "From=whatsapp%3A%2B14155550100&Body=hi+there";
+      const r2 = (await (await fetch(`${a.base}/webhooks/probe`, { method: "POST", headers: { "content-type": "application/x-www-form-urlencoded" }, body: form })).json()) as any;
+      assert.equal(r2.raw, form);
+      assert.equal(r2.parsed.Body, "hi there");
+      assert.equal((await fetch(`${a.base}/webhooks/unknown`, { method: "POST" })).status, 404);
+      assert.equal(seen.publicBaseUrl, "https://hooks.example");
+      assert.equal(seen.frontendUrl, "https://app.example");
+      const blob = encryptSecrets(seen.secretsKey, { apiKey: "re_secret_value" });
+      assert.ok(!blob.includes("re_secret_value"));
+      assert.deepEqual(decryptSecrets(seen.secretsKey, blob), { apiKey: "re_secret_value" });
+      assert.throws(() => decryptSecrets(Buffer.alloc(32, 9), blob)); // a different key cannot read it
+    } finally { a.close(); }
+  });
+
+  it("creates the secrets key once, keeps it across restarts, and prefers SECRETS_KEY", async () => {
+    const { mkdtempSync, rmSync, readFileSync } = await import("node:fs");
+    const { tmpdir } = await import("node:os");
+    const { join } = await import("node:path");
+    const { loadSecretsKey } = await import("../src/integrations/key.ts");
+    const dir = mkdtempSync(join(tmpdir(), "ubmp-key-"));
+    const dbPath = join(dir, "data", "app.db");
+    const first = loadSecretsKey(undefined, dbPath);
+    assert.equal(first.length, 32);
+    assert.deepEqual(loadSecretsKey(undefined, dbPath), first); // same key after a "restart"
+    assert.equal(readFileSync(join(dir, "data", "secrets.key"), "utf8").length, 64);
+    assert.deepEqual(loadSecretsKey("11".repeat(32), dbPath), Buffer.alloc(32, 0x11)); // env wins
+    assert.throws(() => loadSecretsKey("too-short", dbPath));
+    rmSync(dir, { recursive: true, force: true });
+  });
+});

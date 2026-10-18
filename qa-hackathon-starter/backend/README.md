@@ -26,6 +26,9 @@ npm test            # all suites, real HTTP against throwaway databases
 | `CORS_ORIGINS` | `http://localhost:3000` | frontend origins allowed to call with cookies |
 | `COOKIE_SECURE` | false | set `true` behind HTTPS |
 | `WORKER_INTERVAL_MS` | 1000 | how often due acknowledgement windows are checked |
+| `PUBLIC_BASE_URL` | `http://localhost:<PORT>` | public HTTPS address providers call (tunnel or deployed host) |
+| `FRONTEND_URL` | first `CORS_ORIGINS` | where alert links and OAuth redirects point |
+| `SECRETS_KEY` | generated in `data/secrets.key` | 32-byte key (64 hex) encrypting provider secrets at rest |
 
 ## How it is organised (Q14)
 ```
@@ -36,7 +39,8 @@ src/middleware        requireAuth, requirePermission, CORS/CSRF/headers
 src/crm               contacts, companies, pipelines, custom fields, opportunities, saved lists
 src/leads             service.ts = all lead rules; routes.ts; worker.ts = durable timer
 src/audit, dashboard, events
-src/integrations/core.ts   shared plumbing for Member 3 (processOnce, encrypted secrets, sync history)
+src/integrations/     index.ts = where the integrations module plugs in (mount routers, background ticks)
+                      core.ts = processOnce, encrypted secrets, connections, sync history; key.ts = secrets key
 drafts/               reference-only integration drafts (not built, not tested)
 ```
 Rules live in services (`leads/service.ts`), routes only validate and call them, and every mutation that must

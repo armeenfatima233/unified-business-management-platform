@@ -85,7 +85,7 @@ an acknowledged lead whose owner goes On leave/Offline keeps its owner and shows
 
 ## Not implemented here (Member 3, I1-I5)
 Messaging conversations and Twilio webhooks, Stripe payment requests and webhooks, Google Calendar OAuth and appointments,
-the escalation alert sender (I4), and the integrations status page. The core exposes these hooks for them: tables
+the escalation alert sender (I4), and the integrations status page. The core exposes these hooks for them (register routers in `backend/src/integrations/index.ts`; webhooks get the exact bytes as `req.rawBody` plus an `IntegrationContext` with the database, the encrypted-secrets key, the public base URL and an injectable `fetch`): tables
 `conversations, messages, payments, appointments, integration_connections, integration_events, processed_events,
 notification_destinations, delivery_attempts`; `processOnce()` for webhook de-duplication in
 `src/integrations/core.ts`; `createLead()`/`recordLeadAction()`; `findOrCreateContact()`; and pending alert rows in
