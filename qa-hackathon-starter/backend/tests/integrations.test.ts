@@ -10,6 +10,7 @@ import { startApp, type TestApp } from "./helpers.ts";
 let app: TestApp;
 let resendClientMode: "valid" | "invalid" = "valid";
 let receivedEmailId = "";
+let googleTokenExchangeFails = false;
 
 const fakeResendClient = (_apiKey: string): ResendSdkClient =>
   ({
@@ -47,13 +48,16 @@ const googleSdk: GoogleCalendarSdk = {
   createOAuthClient: () => ({
     generateAuthUrl: (options) =>
       `https://accounts.google.test/authorize?state=${encodeURIComponent(options.state)}`,
-    getToken: async () => ({
-      tokens: {
-        access_token: "access-token",
-        refresh_token: "refresh-token",
-        expiry_date: Date.now() + 60_000,
-      },
-    }),
+    getToken: async () => {
+      if (googleTokenExchangeFails) throw new Error("provider details must not leak");
+      return {
+        tokens: {
+          access_token: "access-token",
+          refresh_token: "refresh-token",
+          expiry_date: Date.now() + 60_000,
+        },
+      };
+    },
     setCredentials: () => undefined,
     refreshAccessToken: async () => ({
       credentials: { access_token: "refreshed-token" },
@@ -125,6 +129,43 @@ function receivedWebhook(eventId: string) {
     },
     id: eventId,
   };
+}
+
+async function createOAuthTestSession(suffix: string) {
+  const response = await fetch(`${app.base}/auth/signup`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      email: `oauth-${suffix}@example.test`,
+      password: "OAuth-Test-Password-123!",
+      name: "OAuth Test",
+      workspaceName: `OAuth ${suffix}`,
+    }),
+  });
+  assert.equal(response.status, 201);
+  const body = (await response.json()) as {
+    user: { id: string };
+    workspace: { id: string };
+  };
+  const setCookie = response.headers.get("set-cookie");
+  assert.ok(setCookie);
+  return {
+    userId: body.user.id,
+    workspaceId: body.workspace.id,
+    cookie: setCookie.split(";")[0]!,
+  };
+}
+
+async function startGoogleOAuth(cookie: string): Promise<string> {
+  const response = await fetch(
+    `${app.base}/integrations/google/calendar/oauth/start`,
+    { headers: { cookie } },
+  );
+  assert.equal(response.status, 200);
+  const body = (await response.json()) as { authorizationUrl: string };
+  const state = new URL(body.authorizationUrl).searchParams.get("state");
+  assert.ok(state);
+  return state;
 }
 
 describe("backend Resend integration", () => {
@@ -219,39 +260,82 @@ describe("backend Resend integration", () => {
 });
 
 describe("Google Calendar OAuth backend routes", () => {
-  it("connects the authenticated member, encrypts tokens, and rejects a replayed state", async () => {
-    const team = await app.team(0);
-    const start = await team.owner(
-      "GET",
-      "/integrations/google/calendar/oauth/start",
+  it("redirects successful consent to the configured frontend without exposing codes or state", async () => {
+    const session = await createOAuthTestSession("success");
+    const state = await startGoogleOAuth(session.cookie);
+    const callback = await fetch(
+      `${app.base}/integrations/google/calendar/oauth/callback?code=code-1&state=${encodeURIComponent(state)}&redirect_uri=https%3A%2F%2Fevil.example`,
+      { headers: { cookie: session.cookie }, redirect: "manual" },
     );
-    assert.equal(start.status, 200);
-    const authorizationUrl = new URL(start.json.authorizationUrl);
-    const state = authorizationUrl.searchParams.get("state");
-    assert.ok(state);
-
-    const callback = await team.owner(
-      "GET",
-      `/integrations/google/calendar/oauth/callback?code=code-1&state=${encodeURIComponent(state)}`,
-    );
-    assert.equal(callback.status, 200);
-    assert.deepEqual(callback.json, { connected: true });
+    assert.equal(callback.status, 302);
+    const location = callback.headers.get("location");
+    assert.equal(location, "https://app.example.test/?google=connected");
+    assert.ok(!location?.includes("code-1"));
+    assert.ok(!location?.includes(state));
 
     const connection = getConnection(
       app.db,
-      team.workspaceId,
+      session.workspaceId,
       "google",
-      team.ownerId,
+      session.userId,
     );
     assert.ok(connection);
     assert.ok(connection.secrets_enc);
     assert.ok(!connection.secrets_enc.includes("refresh-token"));
 
-    const replay = await team.owner(
-      "GET",
-      `/integrations/google/calendar/oauth/callback?code=code-1&state=${encodeURIComponent(state)}`,
+    const replay = await fetch(
+      `${app.base}/integrations/google/calendar/oauth/callback?code=code-1&state=${encodeURIComponent(state)}`,
+      { headers: { cookie: session.cookie }, redirect: "manual" },
     );
     assert.equal(replay.status, 400);
+  });
+
+  it("redirects denied consent to the configured frontend after validating state", async () => {
+    const session = await createOAuthTestSession("denied");
+    const state = await startGoogleOAuth(session.cookie);
+    const callback = await fetch(
+      `${app.base}/integrations/google/calendar/oauth/callback?error=access_denied&state=${encodeURIComponent(state)}&error_description=private-provider-details`,
+      { headers: { cookie: session.cookie }, redirect: "manual" },
+    );
+    assert.equal(callback.status, 302);
+    const location = callback.headers.get("location");
+    assert.equal(location, "https://app.example.test/?google=denied");
+    assert.ok(!location?.includes("access_denied"));
+    assert.ok(!location?.includes("private-provider-details"));
+    assert.ok(!location?.includes(state));
+  });
+
+  it("redirects other provider failures without revealing provider details", async () => {
+    const session = await createOAuthTestSession("provider-error");
+    const state = await startGoogleOAuth(session.cookie);
+    const callback = await fetch(
+      `${app.base}/integrations/google/calendar/oauth/callback?error=server_error&error_description=private-provider-details&state=${encodeURIComponent(state)}`,
+      { headers: { cookie: session.cookie }, redirect: "manual" },
+    );
+    assert.equal(callback.status, 302);
+    const location = callback.headers.get("location");
+    assert.equal(location, "https://app.example.test/?google=error");
+    assert.ok(!location?.includes("server_error"));
+    assert.ok(!location?.includes("private-provider-details"));
+    assert.ok(!location?.includes(state));
+
+    const exchangeSession = await createOAuthTestSession("exchange-error");
+    const exchangeState = await startGoogleOAuth(exchangeSession.cookie);
+    googleTokenExchangeFails = true;
+    try {
+      const exchangeFailure = await fetch(
+        `${app.base}/integrations/google/calendar/oauth/callback?code=private-code&state=${encodeURIComponent(exchangeState)}`,
+        { headers: { cookie: exchangeSession.cookie }, redirect: "manual" },
+      );
+      assert.equal(exchangeFailure.status, 302);
+      assert.equal(
+        exchangeFailure.headers.get("location"),
+        "https://app.example.test/?google=error",
+      );
+      assert.ok(!exchangeFailure.headers.get("location")?.includes("private-code"));
+    } finally {
+      googleTokenExchangeFails = false;
+    }
   });
 
   it("rejects a callback made from a different authenticated session", async () => {
