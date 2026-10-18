@@ -28,6 +28,7 @@ npm test            # all suites, real HTTP against throwaway databases
 | `WORKER_INTERVAL_MS` | 1000 | how often due acknowledgement windows are checked |
 | `PUBLIC_BASE_URL` | `http://localhost:<PORT>` | public HTTPS address providers call (tunnel or deployed host) |
 | `FRONTEND_URL` | first `CORS_ORIGINS` | where alert links and OAuth redirects point |
+| `RESEND_API_KEY`, `RESEND_FROM_EMAIL` | unset | enable escalation emails (I4); needs `integrations/resend` merged and `npm install` run there |
 | `SECRETS_KEY` | generated in `data/secrets.key` | 32-byte key (64 hex) encrypting provider secrets at rest |
 
 ## How it is organised (Q14)
