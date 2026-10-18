@@ -1,0 +1,17 @@
+{
+  "name": "ubmp-google-calendar-integration",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "node --test",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "google-auth-library": "^11.3.1",
+    "googleapis": "^186.0.0"
+  },
+  "devDependencies": {
+    "@types/node": "^24.13.4",
+    "typescript": "^6.0.3"
+  }
+}

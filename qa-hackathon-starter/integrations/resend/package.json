@@ -1,0 +1,17 @@
+{
+  "name": "ubmp-resend-integration",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "node --test",
+    "typecheck": "tsc --noEmit",
+    "test:send": "node --env-file-if-exists=.env send-test-email.mjs"
+  },
+  "dependencies": {
+    "resend": "6.34.1"
+  },
+  "devDependencies": {
+    "@types/node": "24.13.4",
+    "typescript": "6.0.3"
+  }
+}
