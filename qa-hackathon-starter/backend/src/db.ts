@@ -421,17 +421,6 @@ CREATE TABLE IF NOT EXISTS delivery_attempts (
 );
 CREATE INDEX IF NOT EXISTS idx_delivery_pending ON delivery_attempts(status, next_attempt_at);
 
--- Google OAuth state (I3.1): only a hash of the state is stored, bound to the hash of the session that started
--- the flow, single use, short-lived. The callback must come back with the same session.
-CREATE TABLE IF NOT EXISTS google_oauth_states (
-  state_hash           TEXT PRIMARY KEY,
-  workspace_id         TEXT NOT NULL,
-  user_id              TEXT NOT NULL,
-  session_binding_hash TEXT NOT NULL,
-  expires_at           TEXT NOT NULL
-);
-
--- (superseded by google_oauth_states; kept so older database files still open)
 CREATE TABLE IF NOT EXISTS oauth_states (
   state        TEXT PRIMARY KEY,
   workspace_id TEXT NOT NULL,

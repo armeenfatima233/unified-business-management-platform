@@ -7,15 +7,10 @@
 import type { Express } from "express";
 import { createFailureRecorder, createRecipientResolver, dispatchAlerts, type EscalationAlertSender } from "./alerts.ts";
 import type { IntegrationContext } from "./core.ts";
-import { googleOAuthRouter } from "./googleCalendar.ts";
-import { resendSettingsRouter, resendWebhookRouter } from "./resend.ts";
-import { integrationsStatusRouter } from "./status.ts";
 
-export function mountIntegrations(app: Express, ctx: IntegrationContext): void {
-  app.use("/api/v1/webhooks/resend", resendWebhookRouter(ctx)); // public: authenticated by the Svix signature
-  app.use("/api/v1", resendSettingsRouter(ctx)); // connect this workspace's inbox (Admin)
-  app.use("/api/v1", googleOAuthRouter(ctx)); // connect / callback / status / disconnect
-  app.use("/api/v1", integrationsStatusRouter(ctx)); // central status page + synchronisation history
+export function mountIntegrations(_app: Express, _ctx: IntegrationContext): void {
+  // e.g. app.use("/api/v1/webhooks/resend", resendWebhookRouter(ctx));
+  //      app.use("/api/v1", googleCalendarRouter(ctx));
 }
 
 // I4: builds the Resend escalation-alert adapter (integrations/resend) on first use. It is loaded lazily and
