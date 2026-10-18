@@ -10,6 +10,9 @@ of application routes, contact matching, lead creation, and persistence.
 - For `email.received`, retrieves the body through Resend's receiving API:
   receiving webhooks contain metadata and attachment metadata, not message
   bodies or attachment contents.
+- Passes inbound attachment IDs, names, and content types to the backend;
+  downloading attachment contents requires a separate receiving-attachments
+  API integration and is not implemented here.
 - Passes the provider webhook ID to `ResendWebhookEventDeduplicator`. The
   application must implement that interface using durable, atomic storage and
   mark an event complete only after handler work succeeds. It must serialize
@@ -23,6 +26,48 @@ of application routes, contact matching, lead creation, and persistence.
 The backend must provide the durable deduplicator and typed inbound/delivery
 handlers. No route, database model, recipient matching rule, or lead contract
 is defined here.
+
+## Inbound webhook backend handoff
+
+Resend's documented `email.received` event contains `created_at` and `data`
+fields including `email_id`, `message_id`, `from`, `to`, `cc`, `bcc`,
+`received_for`, `subject`, and attachment metadata (`id`, `filename`,
+`content_type`, with optional disposition/content ID metadata). It does not
+contain the message body. The adapter retrieves that body using
+`emails.receiving.get(email_id)` before calling `onIncomingEmail`.
+
+The adapter is ready to be mounted by a backend route, but this repository has
+no implemented backend server or approved route contract. The owning backend
+developer must provide a public HTTPS `POST` route at a team-approved path.
+That route must preserve the raw request body, map the three Svix headers to
+`ResendWebhookHeaders`, call `handleWebhook`, acknowledge processed/duplicate/
+ignored events with success, and return a retryable failure for transient
+provider or handler failures. Do not parse and re-serialize JSON before
+signature verification. Until the backend host and route are agreed, the URL
+is only `https://<backend-public-host>/<team-approved-webhook-path>`; no real
+webhook URL can be configured.
+
+The backend handoff boundary is `ResendWebhookHandlers.onIncomingEmail(email:
+IncomingEmail): Promise<void>` plus
+`ResendWebhookEventDeduplicator.processOnce(providerEventId, work)`. To
+implement customer CRM behavior behind that callback, the backend team must
+agree and supply contracts for:
+
+- **Workspace/inbox resolution:** map the received recipient (`receivedFor`
+  and/or `to`) to a workspace and authorized inbox. The mapping must be
+  server-controlled, not accepted from webhook payload as a trusted tenant ID.
+- **Contact resolution:** normalize/match the sender address within that
+  workspace and define whether/how unknown senders create contacts.
+- **Conversation/message handling:** find or create the conversation for the
+  resolved contact and inbox, then idempotently append the inbound message
+  using the provider email/message IDs.
+- **Lead handling:** decide whether an inbound email creates a lead, under
+  what conditions, and return/use the approved lead contract. Neither automatic
+  lead creation nor a lead source vocabulary is assumed by this adapter.
+
+These CRM actions must run within the backend's durable idempotent processing
+boundary. No contact IDs, conversation schema, lead route, source label, or
+unknown-sender policy is assumed here.
 
 ## Account setup
 

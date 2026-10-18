@@ -39,7 +39,15 @@ function receivedPayload(emailId = "received_123"): string {
       received_for: ["support@example.test"],
       message_id: "<source-message@example.test>",
       subject: "Help needed",
-      attachments: [],
+      attachments: [
+        {
+          id: "attachment_123",
+          filename: "details.pdf",
+          content_type: "application/pdf",
+          content_disposition: "attachment",
+          content_id: null,
+        },
+      ],
     },
   });
 }
@@ -105,7 +113,16 @@ function receivedEmailResponse(id = "received_123"): GetReceivingEmailResponse {
     text: "Help",
     headers: { from: "Customer <customer@example.test>" },
     message_id: "<source-message@example.test>",
-    attachments: [],
+    attachments: [
+      {
+        id: "attachment_123",
+        filename: "details.pdf",
+        size: 1024,
+        content_type: "application/pdf",
+        content_disposition: "attachment",
+        content_id: null,
+      },
+    ],
   });
 }
 
@@ -245,8 +262,35 @@ test("fetches inbound body from Resend and parses the received email", async () 
     text: "Help",
     html: "<p>Help</p>",
     receivedAt: new Date("2026-10-18T04:59:00.000Z"),
-    attachments: [],
+    attachments: [
+      {
+        id: "attachment_123",
+        filename: "details.pdf",
+        contentType: "application/pdf",
+      },
+    ],
   });
+});
+
+test("rejects a payload changed after signing without retrieving or handling it", async () => {
+  const sdk = new Resend("re_test_key");
+  let receivedEmailFetches = 0;
+  const { adapter, incoming } = createAdapter({
+    verify: (options) => sdk.webhooks.verify(options),
+    getReceived: async (id) => {
+      receivedEmailFetches += 1;
+      return receivedEmailResponse(id);
+    },
+  });
+  const payload = receivedPayload();
+  const headers = signPayload(payload);
+
+  await assert.rejects(
+    adapter.handleWebhook(`${payload} `, headers),
+    ResendWebhookAuthenticationError,
+  );
+  assert.equal(receivedEmailFetches, 0);
+  assert.equal(incoming.length, 0);
 });
 
 test("deduplicates repeated webhook IDs and supports concurrent duplicate deliveries", async () => {
@@ -289,6 +333,30 @@ test("retries processing after the inbound body fetch fails", async () => {
     providerEventId: "msg_retry",
   });
   assert.equal(incoming.length, 1);
+});
+
+test("leaves inbound webhook retryable when the backend handler fails", async () => {
+  let handlerCalls = 0;
+  const { adapter } = createAdapter({
+    onIncomingEmail: async () => {
+      handlerCalls += 1;
+      if (handlerCalls === 1) {
+        throw new Error("backend unavailable");
+      }
+    },
+  });
+  const payload = receivedPayload();
+  const headers = signPayload(payload, "msg_handler_retry");
+
+  await assert.rejects(
+    adapter.handleWebhook(payload, headers),
+    /backend unavailable/,
+  );
+  assert.deepEqual(await adapter.handleWebhook(payload, headers), {
+    kind: "processed",
+    providerEventId: "msg_handler_retry",
+  });
+  assert.equal(handlerCalls, 2);
 });
 
 test("processes delivery events and deduplicates them by Resend webhook ID", async () => {
