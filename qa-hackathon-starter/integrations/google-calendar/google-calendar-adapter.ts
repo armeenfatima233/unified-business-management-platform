@@ -364,17 +364,7 @@ export class GoogleCalendarAdapter {
     if (!code || !state || !sessionBinding) {
       throw new GoogleCalendarOAuthStateError();
     }
-    const stateHash = createHash("sha256").update(state).digest("hex");
-    const sessionBindingHash = createHash("sha256")
-      .update(sessionBinding)
-      .digest("hex");
-    const context = await this.oauthStateStore.consume(
-      stateHash,
-      sessionBindingHash,
-    );
-    if (context === null) {
-      throw new GoogleCalendarOAuthStateError();
-    }
+    const context = await this.consumeAuthorizationState(state, sessionBinding);
 
     const client = this.createOAuthClient();
     let tokens: Credentials;
@@ -395,6 +385,34 @@ export class GoogleCalendarAdapter {
     }
     await this.connectionStore.saveCredentials(context, credentials);
     await this.connectionStore.setStatus(context, "connected");
+    return context;
+  }
+
+  async validateAuthorizationState(
+    state: string,
+    sessionBinding: string,
+  ): Promise<GoogleCalendarMemberContext> {
+    if (!state || !sessionBinding) {
+      throw new GoogleCalendarOAuthStateError();
+    }
+    return this.consumeAuthorizationState(state, sessionBinding);
+  }
+
+  private async consumeAuthorizationState(
+    state: string,
+    sessionBinding: string,
+  ): Promise<GoogleCalendarMemberContext> {
+    const stateHash = createHash("sha256").update(state).digest("hex");
+    const sessionBindingHash = createHash("sha256")
+      .update(sessionBinding)
+      .digest("hex");
+    const context = await this.oauthStateStore.consume(
+      stateHash,
+      sessionBindingHash,
+    );
+    if (context === null) {
+      throw new GoogleCalendarOAuthStateError();
+    }
     return context;
   }
 

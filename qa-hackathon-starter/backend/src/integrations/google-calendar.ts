@@ -41,6 +41,27 @@ export function oauthConfiguration(
   return { clientId, clientSecret, redirectUri };
 }
 
+type GoogleOAuthResult = "connected" | "denied" | "error";
+
+function frontendResultRedirect(
+  frontendUrl: string,
+  result: GoogleOAuthResult,
+): string {
+  const target = new URL(frontendUrl);
+  const isLocalHttp =
+    target.protocol === "http:" &&
+    ["localhost", "127.0.0.1", "[::1]"].includes(target.hostname);
+  if (
+    (target.protocol !== "https:" && !isLocalHttp) ||
+    target.username.length > 0 ||
+    target.password.length > 0
+  ) {
+    throw new TypeError("FRONTEND_URL must be a trusted HTTPS URL");
+  }
+  target.searchParams.set("google", result);
+  return target.toString();
+}
+
 export function memberContext(
   workspaceId: string,
   memberId: string,
@@ -279,6 +300,8 @@ export function googleCalendarOAuthRouter(
   router.get("/oauth/callback", async (req, res) => {
     const code = typeof req.query.code === "string" ? req.query.code : "";
     const state = typeof req.query.state === "string" ? req.query.state : "";
+    const providerError =
+      typeof req.query.error === "string" ? req.query.error : "";
     const sessionBinding = req.cookies?.[SESSION_COOKIE];
     if (typeof sessionBinding !== "string" || sessionBinding.length === 0) {
       return apiError(res, 401, "UNAUTHENTICATED", "Please log in.");
@@ -289,6 +312,26 @@ export function googleCalendarOAuthRouter(
         oauthConfiguration(environment),
         sdk,
       );
+      if (providerError || !code) {
+        const denied = providerError === "access_denied";
+        const stateContext = await adapter.validateAuthorizationState(
+          state,
+          sessionBinding,
+        );
+        if (
+          stateContext.workspaceId !== req.session!.workspaceId ||
+          stateContext.memberId !== req.session!.userId
+        ) {
+          return apiError(res, 400, "INVALID_OAUTH_STATE", "OAuth state is invalid or expired.");
+        }
+        return res.redirect(
+          302,
+          frontendResultRedirect(
+            ctx.frontendUrl,
+            denied ? "denied" : "error",
+          ),
+        );
+      }
       const connectedMember = await adapter.completeAuthorization(
         code,
         state,
@@ -300,18 +343,27 @@ export function googleCalendarOAuthRouter(
       ) {
         return apiError(res, 400, "INVALID_OAUTH_STATE", "OAuth state is invalid or expired.");
       }
-      res.json({ connected: true });
+      return res.redirect(
+        302,
+        frontendResultRedirect(ctx.frontendUrl, "connected"),
+      );
     } catch (error) {
       if (error instanceof GoogleCalendarOAuthStateError) {
         return apiError(res, 400, "INVALID_OAUTH_STATE", "OAuth state is invalid or expired.");
       }
       if (error instanceof GoogleCalendarOAuthError) {
-        return apiError(res, 502, "GOOGLE_AUTHORIZATION_FAILED", "Google Calendar authorization failed.");
+        return res.redirect(
+          302,
+          frontendResultRedirect(ctx.frontendUrl, "error"),
+        );
       }
       console.error("Google Calendar OAuth callback failed", {
         errorName: error instanceof Error ? error.name : "UnknownError",
       });
-      return apiError(res, 500, "GOOGLE_AUTHORIZATION_FAILED", "Google Calendar authorization failed.");
+      return res.redirect(
+        302,
+        frontendResultRedirect(ctx.frontendUrl, "error"),
+      );
     }
   });
 

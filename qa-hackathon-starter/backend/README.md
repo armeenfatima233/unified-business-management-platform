@@ -24,7 +24,7 @@ npm test            # all suites, real HTTP against throwaway databases
 | `PORT` | 8080 | listen port |
 | `DB_PATH` | `./data/app.db` | SQLite file (kept out of git) |
 | `CORS_ORIGINS` | `http://localhost:3000` | frontend origins allowed to call with cookies |
-| `COOKIE_SECURE` | false | set `true` behind HTTPS |
+| `COOKIE_SECURE` | false | set `true` behind HTTPS; required for the session cookie on the public Google OAuth callback |
 | `WORKER_INTERVAL_MS` | 1000 | how often due acknowledgement windows are checked |
 | `PUBLIC_BASE_URL` | `http://localhost:<PORT>` | public HTTPS address providers call (tunnel or deployed host) |
 | `FRONTEND_URL` | first `CORS_ORIGINS` | where alert links and OAuth redirects point |
@@ -51,8 +51,12 @@ npm test            # all suites, real HTTP against throwaway databases
   is not exposed as an API route yet.
 - Google OAuth starts at `GET /api/v1/integrations/google/calendar/oauth/start` and returns to
   `GET /api/v1/integrations/google/calendar/oauth/callback`. OAuth state is session-bound and one-use;
-  member credentials are encrypted in the existing Google integration connection. Calendar appointment
-  CRUD routes are not part of this backend wiring.
+  member credentials are encrypted in the existing Google integration connection. The callback redirects
+  to the configured `FRONTEND_URL` with only `google=connected`, `google=denied`, or `google=error`;
+  it validates the saved session-bound state and does not forward OAuth codes, tokens, or provider error
+  details. Configure `FRONTEND_URL` as a trusted HTTPS origin and set `COOKIE_SECURE=true` when serving
+  over HTTPS so the callback receives the authenticated session cookie. Calendar appointment CRUD routes
+  are not part of this backend wiring.
 
 ## How it is organised (Q14)
 ```
