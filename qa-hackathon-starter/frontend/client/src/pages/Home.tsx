@@ -35,7 +35,18 @@ import {
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useLocation } from "wouter";
-import { clearDemoSession, getDashboardCounts } from "@/api";
+import { getDashboardCounts } from "@/api";
+import { NavProvider, notify, useSession, type NavParams } from "@/live/session";
+import { setMyAvailability } from "@/live/api/team";
+import { listLeads } from "@/live/api/leads";
+import { useAsync } from "@/live/useAsync";
+import { LivePage, moduleOfId } from "@/live/pages";
+import { availabilityLabel, levelLabel } from "@/live/format";
+import type { Availability, Permission } from "@/live/api/types";
+
+// NOTE: this file is the shell (sidebar, top bar) of the app, connected to the backend. The page components further down
+// (Dashboard, Pipeline, PaymentsView ... ModuleView) are the ORIGINAL STATIC PROTOTYPE and are no longer rendered: what the
+// app shows now comes from client/src/live/pages, which reuse the same CSS classes and talk to the backend.
 
 type Pulse = "SAFE" | "WATCH" | "CRITICAL" | "ESCALATED";
 type Lead = { name: string; company: string; source: string; owner: string; initials: string; pulse: Pulse; time: string; timer: string; secondsRemaining: number; reason: string };
@@ -44,18 +55,18 @@ type PipelineStage = { id: string; name: string; color: string; deals: Deal[] };
 
 const navItems = [
   { section: "Overview", label: "Dashboard", icon: LayoutDashboard },
-  { section: "Revenue", label: "Leads", icon: Zap, badge: String(getDashboardCounts().leads) },
-  { section: "Revenue", label: "Pipeline", icon: Activity },
-  { section: "Revenue", label: "Contacts", icon: Users },
-  { section: "Revenue", label: "Companies", icon: Building2 },
+  { section: "Revenue", label: "Leads", icon: Zap },
+  { section: "Revenue", label: "Pipeline", icon: Activity, needs: "crmView" as Permission },
+  { section: "Revenue", label: "Contacts", icon: Users, needs: "crmView" as Permission },
+  { section: "Revenue", label: "Companies", icon: Building2, needs: "crmView" as Permission },
   { section: "Engagement", label: "Conversations", icon: Headphones },
-  { section: "Engagement", label: "Recovery Queue", icon: LifeBuoy, badge: String(getDashboardCounts().recovery), urgent: true },
+  { section: "Engagement", label: "Recovery Queue", icon: LifeBuoy, urgent: true },
   { section: "Operations", label: "Appointments", icon: CalendarDays },
   { section: "Operations", label: "Payments", icon: CreditCard },
   { section: "Operations", label: "Team", icon: Users },
-  { section: "Workspace", label: "Integrations", icon: SlidersHorizontal, dot: true },
-  { section: "Workspace", label: "Audit Log", icon: FileClock },
-  { section: "Workspace", label: "Settings", icon: Settings },
+  { section: "Workspace", label: "Integrations", icon: SlidersHorizontal, needs: "manageIntegrations" as Permission },
+  { section: "Workspace", label: "Audit Log", icon: FileClock, needs: "viewAuditLog" as Permission },
+  { section: "Workspace", label: "Settings", icon: Settings, adminOnly: true },
 ];
 
 const leads: Lead[] = [
@@ -112,23 +123,23 @@ function PulsePill({ pulse }: { pulse: Pulse }) {
   return <span className={cn("pulse-pill", item.className)}><Icon size={13} />{item.label}</span>;
 }
 
-function TopBar({ activeNav, setAvailability, availability, onMenu }: { activeNav: string; setAvailability: (value: string) => void; availability: string; onMenu: () => void }) {
+function TopBar({ activeNav, setAvailability, availability, onMenu, onGo }: { activeNav: string; setAvailability: (value: Availability) => void; availability: Availability; onMenu: () => void; onGo: (module: string) => void }) {
   const [open, setOpen] = useState(false);
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [query, setQuery] = useState("");
-  const [roleOpen, setRoleOpen] = useState(false);
   const [accountOpen, setAccountOpen] = useState(false);
-  const [role, setRole] = useDemoRole();
+  const { user, signOut, liveEvents } = useSession();
+  const [bellOpen, setBellOpen] = useState(false);
   const [, navigate] = useLocation();
   useEffect(() => { const onKey = (event: KeyboardEvent) => { if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "k") { event.preventDefault(); setPaletteOpen(true); } if (event.key === "Escape") setPaletteOpen(false); }; window.addEventListener("keydown", onKey); return () => window.removeEventListener("keydown", onKey); }, []);
-  const paletteResults = ["Dashboard", "Leads", "Pipeline", "Contacts", "Companies", "Conversations", "Recovery Queue", "Appointments", "Payments", "Team", "Integrations", "Audit Log", "Settings", "Maya Chen", "Northstar Studio", "Jon Bell", "Ridgeway Homes"].filter(item => item.toLowerCase().includes(query.toLowerCase())).slice(0, 8);
+  const paletteResults = ["Dashboard", "Leads", "Pipeline", "Contacts", "Companies", "Conversations", "Recovery Queue", "Appointments", "Payments", "Team", "Integrations", "Audit Log", "Settings"].filter(item => item.toLowerCase().includes(query.toLowerCase())).slice(0, 8);
   return <header className="topbar">
-    <div className="topbar-left"><button className="icon-button mobile-menu" aria-label="Open navigation" onClick={onMenu}><Menu size={21} /></button><div className="breadcrumb"><span>Northstar Services</span><ChevronRight size={15} /><strong>{activeNav}</strong></div></div>
+    <div className="topbar-left"><button className="icon-button mobile-menu" aria-label="Open navigation" onClick={onMenu}><Menu size={21} /></button><div className="breadcrumb"><span>{user?.workspaceName}</span><ChevronRight size={15} /><strong>{activeNav}</strong></div></div>
     <div className="top-actions">
       <button className="command-button" onClick={() => setPaletteOpen(true)} aria-label="Open command palette"><Command size={14} /><span>Quick find</span><kbd>⌘ K</kbd></button>
-      <span className="live-top-indicator"><i /> Live</span><div className="availability-wrap"><button className="availability-button" aria-haspopup="listbox" aria-expanded={open} onClick={() => setOpen(!open)}><span className={cn("availability-dot", availability === "Busy" && "busy", availability === "On leave" && "away", availability === "Offline" && "dnd")} />{availability}<ChevronDown size={14} /></button>{open && <div className="availability-menu" role="listbox">{["Available", "Busy", "On leave", "Offline"].map(status => <button key={status} onClick={() => { setAvailability(status); setOpen(false); }}><span className={cn("availability-dot", status === "Busy" && "busy", status === "On leave" && "away", status === "Offline" && "dnd")} />{status}{status === availability && <Check size={14} />}</button>)}</div>}</div><div className="role-switcher availability-wrap"><button className="role-button" onClick={() => setRoleOpen(!roleOpen)}><span>DEMO</span>{role}<ChevronDown size={13} /></button>{roleOpen && <div className="availability-menu" role="listbox">{["Owner", "Admin", "Manager", "User"].map(item => <button key={item} onClick={() => { setRole(item); setRoleOpen(false); }}>{item}{item === role && <Check size={14} />}</button>)}</div>}</div>
-      <button className="icon-button notification-button" aria-label="Notifications"><Bell size={18} /><span className="notification-dot" /></button><div className="avatar-menu-wrap availability-wrap"><button className="avatar-menu-trigger" aria-label="Open account menu" onClick={() => setAccountOpen(!accountOpen)}><Avatar initials="AM" tone="coral" small /></button>{accountOpen && <div className="account-menu"><strong>Alex Morgan</strong><span>Owner · Northstar Services</span><button onClick={async () => { await clearDemoSession(); navigate("/login"); }}>Log out</button></div>}</div>
-    </div>{paletteOpen && <div className="command-overlay" role="dialog" aria-modal="true" aria-label="Command palette" onClick={() => setPaletteOpen(false)}><div className="command-palette" onClick={event => event.stopPropagation()}><div className="command-input"><Search size={17} /><input autoFocus value={query} onChange={event => setQuery(event.target.value)} placeholder="Search pages, leads, contacts…" /><kbd>ESC</kbd></div><div className="command-results">{paletteResults.map(item => <button key={item} onClick={() => { setPaletteOpen(false); setQuery(""); }}>{item.includes(" ") && !["Recovery Queue", "Audit Log"].includes(item) ? <Users size={15} /> : <LayoutDashboard size={15} />}<span>{item}</span><ArrowUpRight size={13} /></button>)}{paletteResults.length === 0 && <div className="command-empty">No matching pages or records.</div>}</div></div></div>}</header>;
+      <span className="live-top-indicator"><i /> Live</span><div className="availability-wrap"><button className="availability-button" aria-haspopup="listbox" aria-expanded={open} onClick={() => setOpen(!open)}><span className={cn("availability-dot", availability === "busy" && "busy", availability === "on_leave" && "away", availability === "offline" && "dnd")} />{availabilityLabel[availability]}<ChevronDown size={14} /></button>{open && <div className="availability-menu" role="listbox">{(["available", "busy", "on_leave", "offline"] as Availability[]).map(status => <button key={status} onClick={() => { setAvailability(status); setOpen(false); }}><span className={cn("availability-dot", status === "busy" && "busy", status === "on_leave" && "away", status === "offline" && "dnd")} />{availabilityLabel[status]}{status === availability && <Check size={14} />}</button>)}</div>}</div><div className="role-switcher availability-wrap"><span className="role-button" title="Your level in this workspace. The Owner sets it and the server enforces it."><span>ROLE</span>{user ? levelLabel[user.baseLevel] : ""}</span></div>
+      <div className="availability-wrap"><button className="icon-button notification-button" aria-label="Recent activity" onClick={() => setBellOpen(!bellOpen)}><Bell size={18} />{liveEvents.length > 0 && <span className="notification-dot" />}</button>{bellOpen && <div className="availability-menu" style={{ minWidth: 280, right: 0 }} role="region" aria-label="Recent activity">{liveEvents.length === 0 ? <p style={{ margin: 0, padding: 10, fontSize: 12, color: "#667685" }}>Nothing new yet. New leads, escalations and messages appear here as they happen.</p> : liveEvents.map((event, index) => <div key={index} style={{ padding: "8px 10px", fontSize: 12 }}><strong>{event.title}</strong><br /><span style={{ color: "#667685" }}>{event.detail}</span></div>)}</div>}</div><div className="avatar-menu-wrap availability-wrap"><button className="avatar-menu-trigger" aria-label="Open account menu" onClick={() => setAccountOpen(!accountOpen)}><Avatar initials={user?.initials ?? "?"} tone="coral" small /></button>{accountOpen && <div className="account-menu"><strong>{user?.name}</strong><span>{user ? levelLabel[user.baseLevel] : ""} · {user?.workspaceName}</span><button onClick={async () => { await signOut(); navigate("/login"); }}>Log out</button></div>}</div>
+    </div>{paletteOpen && <div className="command-overlay" role="dialog" aria-modal="true" aria-label="Command palette" onClick={() => setPaletteOpen(false)}><div className="command-palette" onClick={event => event.stopPropagation()}><div className="command-input"><Search size={17} /><input autoFocus value={query} onChange={event => setQuery(event.target.value)} placeholder="Search pages, leads, contacts…" /><kbd>ESC</kbd></div><div className="command-results">{paletteResults.map(item => <button key={item} onClick={() => { setPaletteOpen(false); setQuery(""); onGo(item); }}>{item.includes(" ") && !["Recovery Queue", "Audit Log"].includes(item) ? <Users size={15} /> : <LayoutDashboard size={15} />}<span>{item}</span><ArrowUpRight size={13} /></button>)}{paletteResults.length === 0 && <div className="command-empty">No matching pages or records.</div>}</div></div></div>}</header>;
 }
 
 function Dashboard({ onNavigate }: { onNavigate: (page: string) => void }) {
@@ -241,10 +252,29 @@ function ModuleView({ module }: { module: string }) {
 
 export default function Home() {
   const [location] = useLocation();
+  const { user, setUser, can } = useSession();
   const initialModule = location.startsWith("/pipeline") ? "Pipeline" : location.startsWith("/leads") ? "Leads" : location.startsWith("/contacts") ? "Contacts" : location.startsWith("/companies") ? "Companies" : location.startsWith("/conversations") ? "Conversations" : location.startsWith("/recovery") ? "Recovery Queue" : location.startsWith("/appointments") ? "Appointments" : location.startsWith("/payments") ? "Payments" : location.startsWith("/team") ? "Team" : location.startsWith("/integrations") ? "Integrations" : location.startsWith("/audit") ? "Audit Log" : location.startsWith("/settings") ? "Settings" : "Dashboard";
   const [activeNav, setActiveNav] = useState(initialModule);
+  const [params, setParams] = useState<NavParams>(initialModule === "Recovery Queue" ? { tab: "recovery" } : {});
   const [sidebarOpen, setSidebarOpen] = useState(false);
-  const [availability, setAvailability] = useState("Available");
-  const isPipeline = activeNav === "Pipeline";
-  return <div className="app-shell"><aside className={cn("sidebar", sidebarOpen && "sidebar-open")}><div className="brand-row"><div className="brand-mark"><span /><span /><span /></div><div className="brand-copy"><strong>LeadSafe</strong><small>Operations workspace</small></div><button className="icon-button sidebar-close" aria-label="Close navigation" onClick={() => setSidebarOpen(false)}><X size={18} /></button></div><button className="workspace-switcher"><span className="workspace-avatar">NS</span><span className="workspace-text"><strong>Northstar Services</strong><small>Operations workspace</small></span><ChevronDown size={16} /></button><nav className="side-nav" aria-label="Main navigation">{[...new Set(navItems.map(item => item.section))].map(section => <div className="nav-section" key={section}><p className="nav-label">{section}</p>{navItems.filter(item => item.section === section).map(item => { const Icon = item.icon; return <button key={item.label} className={cn("nav-item", activeNav === item.label && "nav-item-active", item.urgent && "nav-item-urgent")} onClick={() => { setActiveNav(item.label); setSidebarOpen(false); }}><Icon size={17} /><span>{item.label}</span>{item.badge && <span className={cn("nav-badge", item.urgent && "nav-badge-urgent")}>{item.badge}</span>}{item.dot && <span className="sandbox-dot" />}</button>; })}</div>)}</nav><div className="sidebar-footer"><div className="pulse-legend"><span className="legend-orb" /><div><strong>Lead Safety Pulse</strong><small>System health is good</small></div><ChevronRight size={15} /></div><div className="user-row"><Avatar initials="AM" tone="coral" /><div><strong>Alex Morgan</strong><small>Workspace owner</small></div><MoreHorizontal size={17} className="muted-icon" /></div></div></aside><main className="main-content"><TopBar activeNav={activeNav} availability={availability} setAvailability={setAvailability} onMenu={() => setSidebarOpen(true)} /><div className="content-wrap">{isPipeline ? <Pipeline /> : activeNav === "Dashboard" ? <Dashboard onNavigate={setActiveNav} /> : <ModuleView module={activeNav} />}<footer className="app-footer"><span><span className="footer-pulse" /> Demo workspace · local data</span><span>Last synced just now <b>·</b> Sandbox data</span></footer></div></main>{sidebarOpen && <div className="mobile-overlay" onClick={() => setSidebarOpen(false)} />}</div>;
+  if (!user) return null;
+
+  // Opening a module (from the sidebar, the quick-find palette or a link inside a page) always starts with a fresh page.
+  const go = (target: string, next: NavParams = {}) => { setActiveNav(moduleOfId[target] ?? target); setParams(target === "Recovery Queue" ? { tab: "recovery", ...next } : next); setSidebarOpen(false); window.scrollTo({ top: 0 }); };
+
+  // An alert email links to /dashboard?lead=<id>: once signed in, open that lead and tidy the address bar.
+  useEffect(() => { const id = new URLSearchParams(window.location.search).get("lead"); if (!id) return; go("Leads", { open: id }); window.history.replaceState({}, "", window.location.pathname); }, []);
+
+  const changeAvailability = async (next: Availability) => {
+    try { await setMyAvailability(next); setUser({ ...user, availability: next }); notify.ok("You are now " + availabilityLabel[next], next === "on_leave" || next === "offline" ? "New leads won’t be assigned to you while you’re away." : undefined); }
+    catch (error) { notify.fail("Could not change your status", error); }
+  };
+
+  // Hiding an entry is only a convenience: the server still refuses what the role cannot do.
+  const allowed = (item: { needs?: Permission; adminOnly?: boolean }) => (!item.needs || can(item.needs)) && (!item.adminOnly || user.baseLevel !== "user");
+  const visibleNav = navItems.filter(allowed);
+  const counts = useAsync(() => Promise.all([listLeads({ scope: "mine", pageSize: 1 }), listLeads({ scope: "recovery", pageSize: 1 }).catch(() => ({ total: 0 }))]), [activeNav]);
+  const badge = (label: string) => label === "Leads" ? counts.data?.[0].total : label === "Recovery Queue" ? counts.data?.[1].total : undefined;
+
+  return <div className="app-shell"><aside className={cn("sidebar", sidebarOpen && "sidebar-open")}><div className="brand-row"><div className="brand-mark"><span /><span /><span /></div><div className="brand-copy"><strong>LeadSafe</strong><small>Operations workspace</small></div><button className="icon-button sidebar-close" aria-label="Close navigation" onClick={() => setSidebarOpen(false)}><X size={18} /></button></div><div className="workspace-switcher"><span className="workspace-avatar">{user.workspaceName.slice(0, 2).toUpperCase()}</span><span className="workspace-text"><strong>{user.workspaceName}</strong><small>Operations workspace</small></span></div><nav className="side-nav" aria-label="Main navigation">{[...new Set(visibleNav.map(item => item.section))].map(section => <div className="nav-section" key={section}><p className="nav-label">{section}</p>{visibleNav.filter(item => item.section === section).map(item => { const Icon = item.icon; const count = badge(item.label); return <button key={item.label} className={cn("nav-item", activeNav === item.label && "nav-item-active", item.urgent && "nav-item-urgent")} onClick={() => go(item.label)}><Icon size={17} /><span>{item.label}</span>{count ? <span className={cn("nav-badge", item.urgent && "nav-badge-urgent")}>{count}</span> : null}</button>; })}</div>)}</nav><div className="sidebar-footer"><div className="user-row"><Avatar initials={user.initials} tone="coral" /><div><strong>{user.name}</strong><small>{levelLabel[user.baseLevel]}</small></div></div></div></aside><main className="main-content"><TopBar activeNav={activeNav} availability={user.availability} setAvailability={changeAvailability} onMenu={() => setSidebarOpen(true)} onGo={go} /><div className="content-wrap"><NavProvider value={{ go, params }}><LivePage key={activeNav + JSON.stringify(params)} module={activeNav} /></NavProvider><footer className="app-footer"><span><span className="footer-pulse" /> {user.workspaceName}</span><span>Signed in as {user.email}</span></footer></div></main>{sidebarOpen && <div className="mobile-overlay" onClick={() => setSidebarOpen(false)} />}</div>;
 }
