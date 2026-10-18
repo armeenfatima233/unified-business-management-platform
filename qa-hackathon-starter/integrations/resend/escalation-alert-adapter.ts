@@ -11,6 +11,7 @@ const RETRY_DELAYS_MS = [250, 1000];
 
 export interface EscalationAlertInput {
   alertId: string;
+  previousAttempts?: number;
   workspaceId: string;
   employeeId: string;
   leadId: string;
@@ -109,6 +110,14 @@ function validateAlert(alert: EscalationAlertInput): URL {
   if (link.protocol !== "https:") {
     throw new TypeError("Escalation alert link must be an absolute HTTPS URL");
   }
+  if (
+    alert.previousAttempts !== undefined &&
+    (!Number.isInteger(alert.previousAttempts) ||
+      alert.previousAttempts < 0 ||
+      alert.previousAttempts >= MAX_ATTEMPTS)
+  ) {
+    throw new TypeError("Escalation alert retry count is invalid");
+  }
   return link;
 }
 
@@ -200,7 +209,12 @@ export class ResendEscalationAlertAdapter {
     };
     const idempotencyKey = makeIdempotencyKey(alert.alertId);
 
-    for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt += 1) {
+    const previousAttempts = alert.previousAttempts ?? 0;
+    for (
+      let attempt = previousAttempts + 1;
+      attempt <= MAX_ATTEMPTS;
+      attempt += 1
+    ) {
       try {
         const receipt = await this.sender.sendEmail(email, { idempotencyKey });
         return { ...receipt, attempts: attempt };

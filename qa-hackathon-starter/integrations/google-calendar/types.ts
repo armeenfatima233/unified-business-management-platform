@@ -1,5 +1,7 @@
 import type { Credentials } from "google-auth-library";
 
+export type GoogleCalendarCredentials = Credentials;
+
 export interface GoogleCalendarMemberContext {
   workspaceId: string;
   memberId: string;

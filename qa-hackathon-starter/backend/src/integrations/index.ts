@@ -6,12 +6,19 @@
 // Shared building blocks are in ./core.ts (encrypted secrets, connections, sync history, processOnce()).
 import type { Express } from "express";
 import type { IntegrationContext } from "./core.ts";
+import { dispatchResendEscalationAlerts, resendWebhookRouter } from "./resend.ts";
+import { googleCalendarOAuthRouter } from "./google-calendar.ts";
 
-export function mountIntegrations(_app: Express, _ctx: IntegrationContext): void {
-  // e.g. app.use("/api/v1/webhooks/resend", resendWebhookRouter(ctx));
-  //      app.use("/api/v1", googleCalendarRouter(ctx));
+export function mountIntegrations(app: Express, ctx: IntegrationContext): void {
+  app.use("/api/v1/webhooks/resend", resendWebhookRouter(ctx));
+  app.use(
+    "/api/v1/integrations/google/calendar",
+    googleCalendarOAuthRouter(ctx),
+  );
 }
 
-export function integrationTicks(_ctx: IntegrationContext): Array<() => Promise<void> | void> {
-  return []; // e.g. [() => dispatchAlerts(ctx), () => retryDueMessages(ctx)]
+export function integrationTicks(
+  ctx: IntegrationContext,
+): Array<() => Promise<void> | void> {
+  return [() => dispatchResendEscalationAlerts(ctx)];
 }

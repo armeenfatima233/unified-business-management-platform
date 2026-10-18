@@ -70,12 +70,15 @@ export interface ResendWebhookEventDeduplicator {
    * Durably serializes each ID, returning false only when its work already succeeded.
    * Failed work must remain retryable; the adapter does not store IDs.
    */
-  processOnce(providerEventId: string, work: () => Promise<void>): Promise<boolean>;
+  processOnce(
+    providerEventId: string,
+    work: () => Promise<void> | void,
+  ): Promise<boolean>;
 }
 
 export interface ResendWebhookHandlers {
-  onIncomingEmail(email: IncomingEmail): Promise<void>;
-  onDeliveryEvent(event: EmailDeliveryEvent): Promise<void>;
+  onIncomingEmail(email: IncomingEmail): Promise<void> | void;
+  onDeliveryEvent(event: EmailDeliveryEvent): Promise<void> | void;
 }
 
 export type ResendWebhookResult =

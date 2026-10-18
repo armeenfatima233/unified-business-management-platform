@@ -234,7 +234,7 @@ export function escalateLead(db: Db, workspaceId: string, leadId: string, nowMs 
 function queueEscalationAlert(db: Db, workspaceId: string, leadId: string, userId: string, reason: string) {
   db.prepare(
     `INSERT INTO delivery_attempts (id, workspace_id, lead_id, user_id, channel, reason, status, attempts, next_attempt_at, created_at)
-     VALUES (?,?,?,?,'telegram',?,'pending',0,?,?)`,
+     VALUES (?,?,?,?,'email',?,'pending',0,?,?)`,
   ).run(randomUUID(), workspaceId, leadId, userId, reason, iso(Date.now()), iso(Date.now()));
 }
 

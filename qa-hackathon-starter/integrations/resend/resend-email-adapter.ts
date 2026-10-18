@@ -437,17 +437,25 @@ export class ResendEmailAdapter {
       return { kind: "ignored", providerEventId, reason: "unsupported_event" };
     }
 
+    const receivedEmail =
+      event.kind === "received"
+        ? parseReceivedEmail(
+            event.providerEmailId,
+            await this.getReceivedEmail(event.providerEmailId),
+          )
+        : null;
+
     const processed = await this.eventDeduplicator.processOnce(
       providerEventId,
-      async () => {
+      () => {
         if (event.kind === "received") {
-          const response = await this.getReceivedEmail(event.providerEmailId);
-          const email = parseReceivedEmail(event.providerEmailId, response);
-          await this.handlers.onIncomingEmail(email);
-          return;
+          if (receivedEmail === null) {
+            throw new ResendProtocolError();
+          }
+          return this.handlers.onIncomingEmail(receivedEmail);
         }
 
-        await this.handlers.onDeliveryEvent({
+        return this.handlers.onDeliveryEvent({
           providerEventId,
           ...event.event,
         });
@@ -493,12 +501,19 @@ export function createResendEmailAdapter(options: {
   }
 
   return new ResendEmailAdapter({
-    client: new Resend(options.apiKey),
+    client: createResendSdkClient(options.apiKey),
     webhookSecret: options.webhookSecret,
     eventDeduplicator: options.eventDeduplicator,
     handlers: options.handlers,
     defaultFrom: options.defaultFrom,
   });
+}
+
+export function createResendSdkClient(apiKey: string): ResendSdkClient {
+  if (apiKey.length === 0) {
+    throw new TypeError("Resend API key must not be empty");
+  }
+  return new Resend(apiKey);
 }
 
 export interface ResendEnvironment {

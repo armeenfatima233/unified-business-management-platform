@@ -249,6 +249,26 @@ test("records final failure after exhausting the retry limit", async () => {
   assert.deepEqual(waits, [250, 1000]);
 });
 
+test("continues from persisted attempts without exceeding the delivery retry limit", async () => {
+  const { adapter, failures, sent, waits } = setup({
+    onSend: async () => {
+      throw new ResendApiError("rate_limit_exceeded", 429);
+    },
+  });
+  await assert.rejects(
+    adapter.sendEscalationAlert({ ...alert, previousAttempts: 2 }),
+    (error: Error) => {
+      assert.ok(error instanceof EscalationAlertDeliveryError);
+      assert.equal(error.attempts, 3);
+      return true;
+    },
+  );
+  assert.equal(sent.length, 1);
+  assert.equal(failures[0].attempt, 3);
+  assert.equal(failures[0].finalAttempt, true);
+  assert.deepEqual(waits, []);
+});
+
 test("requires an HTTPS direct link and does not attempt a send for invalid context", async () => {
   const { adapter, sent } = setup();
   await assert.rejects(

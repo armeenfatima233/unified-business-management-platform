@@ -29,6 +29,25 @@ npm test            # all suites, real HTTP against throwaway databases
 | `PUBLIC_BASE_URL` | `http://localhost:<PORT>` | public HTTPS address providers call (tunnel or deployed host) |
 | `FRONTEND_URL` | first `CORS_ORIGINS` | where alert links and OAuth redirects point |
 | `SECRETS_KEY` | generated in `data/secrets.key` | 32-byte key (64 hex) encrypting provider secrets at rest |
+| `GOOGLE_CALENDAR_CLIENT_ID` | — | Google OAuth web client ID |
+| `GOOGLE_CALENDAR_CLIENT_SECRET` | — | Google OAuth web client secret |
+| `GOOGLE_CALENDAR_REDIRECT_URI` | — | Exact callback URL registered in Google Cloud |
+
+## Connected integration seams
+
+- Resend's public webhook is `POST /api/v1/webhooks/resend/:webhookKey`. It verifies the raw Svix body,
+  resolves the workspace from the saved connection, matches or creates the sender contact, records the
+  email conversation/message, and creates a `message`-source lead transactionally and idempotently.
+  The connection's encrypted secrets contain `apiKey` and `webhookSecret`; its non-secret config may
+  contain `fromEmail` and `inboundAddress`. Configure Resend's webhook URL as
+  `${PUBLIC_BASE_URL}/api/v1/webhooks/resend/${webhook_key}`.
+- Escalation deliveries use `notification_destinations` with `channel = 'email'` and the employee's
+  recipient in `destination`. The existing backend does not yet expose a settings endpoint to create
+  or edit these Resend connection and recipient settings.
+- Google OAuth starts at `GET /api/v1/integrations/google/calendar/oauth/start` and returns to
+  `GET /api/v1/integrations/google/calendar/oauth/callback`. OAuth state is session-bound and one-use;
+  member credentials are encrypted in the existing Google integration connection. Calendar appointment
+  CRUD routes are not part of this backend wiring.
 
 ## How it is organised (Q14)
 ```
