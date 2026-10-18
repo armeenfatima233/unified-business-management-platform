@@ -1,6 +1,7 @@
 import {
   Resend,
   type CreateEmailOptions,
+  type CreateEmailRequestOptions,
   type CreateEmailResponse,
   type GetReceivingEmailResponse,
 } from "resend";
@@ -18,6 +19,7 @@ import type {
 
 type SendEmailMethod = (
   options: CreateEmailOptions,
+  requestOptions?: CreateEmailRequestOptions,
 ) => Promise<CreateEmailResponse>;
 type GetReceivingEmailMethod = (
   id: string,
@@ -378,12 +380,18 @@ export class ResendEmailAdapter {
     this.defaultFrom = defaultFrom;
   }
 
-  async sendEmail(email: OutgoingEmail): Promise<OutgoingEmailReceipt> {
+  async sendEmail(
+    email: OutgoingEmail,
+    requestOptions?: CreateEmailRequestOptions,
+  ): Promise<OutgoingEmailReceipt> {
     const resolvedEmail = resolveOutgoingEmail(email, this.defaultFrom);
 
     let response: CreateEmailResponse;
     try {
-      response = await this.client.emails.send(toCreateEmailOptions(resolvedEmail));
+      response = await this.client.emails.send(
+        toCreateEmailOptions(resolvedEmail),
+        requestOptions,
+      );
     } catch (error) {
       if (error instanceof TypeError) {
         throw new ResendTransportError();

@@ -22,6 +22,10 @@ of application routes, contact matching, lead creation, and persistence.
   `email.bounced`, `email.complained`, `email.failed`, and `email.suppressed`
   delivery events.
 - Sends plain-text and/or HTML mail through `emails.send`.
+- `ResendEscalationAlertAdapter` sends contextual I4 lead-escalation alerts to a
+  backend-resolved employee recipient, records failures through a backend
+  recorder, and retries transient failures at most three times with the same
+  provider idempotency key.
 
 The backend must provide the durable deduplicator and typed inbound/delivery
 handlers. No route, database model, recipient matching rule, or lead contract
@@ -86,6 +90,32 @@ the exact address to be typed for confirmation, and sends only from Resend's
 documented `onboarding@resend.dev` test sender with subject
 `QA Hackathon - Resend Integration Test`. It reports API acceptance, not inbox
 delivery.
+
+## I4 escalation alert handoff
+
+The backend calls
+`ResendEscalationAlertAdapter.sendEscalationAlert(EscalationAlertInput)` after
+its own escalation decision. The typed input includes alert/workspace/employee/
+lead identifiers, lead name, source, reason, and an absolute HTTPS direct link.
+`EscalationAlertRecipientResolver.resolveRecipient(workspaceId, employeeId)`
+must obtain the employee-configured destination from backend-owned,
+workspace-scoped settings. No route or recipient storage schema is assumed.
+
+The backend also implements
+`EscalationAlertFailureRecorder.recordFailure(EscalationAlertFailure)` with
+durable error-history storage. It receives recipient-configuration failures
+(attempt `0`) and each provider failure with attempt number, provider status,
+retryability, and terminal-attempt flag. Resend transport and HTTP 429/5xx
+errors retry up to three total attempts with bounded delays; permanent provider
+errors do not retry. All attempts use one alert-specific idempotency key so a
+provider-accepted request with a lost response is not intentionally duplicated.
+The service returns Resend's accepted message ID and attempt count; it does not
+claim inbox delivery. If failure-history persistence itself fails, that error
+is surfaced to the caller rather than hidden.
+
+Construct this alert adapter with the existing `ResendEmailAdapter` instance
+created from the configured Resend environment so sender defaults and provider
+credentials are reused. Automated tests stub the SDK and never send live alerts.
 
 ## Local checks
 
